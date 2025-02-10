@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ammonia Monitoring System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #4CAF50; color: white; }
+        tr:hover { background-color: #f5f5f5; }
+        .button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Ammonia Monitoring Dashboard</h1>
+    
+    <a href="/download_csv" class="button">Download Data as CSV</a>
+    
+    <table id="readings-table">
+        <thead>
+            <tr>
+                <th>Sensor Location</th>
+                <th>Ammonia Level (PPM)</th>
+                <th>Last Updated</th>
+            </tr>
+        </thead>
+        <tbody id="readings-body">
+        </tbody>
+        <tfoot>
+            <tr>
+                <td><strong>Total Ammonia</strong></td>
+                <td id="total-ammonia">0.00</td>
+                <td></td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <script>
+        const socket = io();
+        const sensorNames = {
+            1: "Trash Can A",
+            2: "Trash Can B"
+        };
+
+        // Update table when new reading arrives
+        socket.on('new_reading', function(data) {
+            updateTable();
+        });
+
+        // Initial load and periodic refresh
+        updateTable();
+        setInterval(updateTable, 10000);
+
+        function updateTable() {
+            fetch('/current_data')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.getElementById('readings-body');
+                    tbody.innerHTML = '';
+                    let total = 0;
+
+                    data.forEach(reading => {
+                        const row = tbody.insertRow();
+                        row.insertCell(0).textContent = sensorNames[reading.sensor_id] || `Sensor ${reading.sensor_id}`;
+                        row.insertCell(1).textContent = reading.ammonia.toFixed(2);
+                        row.insertCell(2).textContent = new Date(reading.timestamp).toLocaleString();
+                        total += reading.ammonia;
+                    });
+
+                    document.getElementById('total-ammonia').textContent = total.toFixed(2);
+                });
+        }
+    </script>
+</body>
+</html>
