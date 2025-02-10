@@ -1,4 +1,3 @@
-
 from flask import Flask, render_template, jsonify, Response
 from flask_mqtt import Mqtt
 from flask_socketio import SocketIO
@@ -11,11 +10,11 @@ from io import StringIO
 app = Flask(__name__)
 
 # MQTT Settings
-app.config['MQTT_BROKER_URL'] = 'localhost'
+app.config['MQTT_BROKER_URL'] = 'broker.emqx.io'
 app.config['MQTT_BROKER_PORT'] = 1883
-app.config['MQTT_USERNAME'] = ''
+app.config['MQTT_USERNAME'] = ''  # public broker doesn't need credentials
 app.config['MQTT_PASSWORD'] = ''
-app.config['MQTT_REFRESH_TIME'] = 1.0
+app.config['MQTT_CLIENT_ID'] = 'AmmoniacServer123'  # Change 123 to random numbers
 
 # Initialize MQTT and SocketIO
 mqtt = Mqtt(app)

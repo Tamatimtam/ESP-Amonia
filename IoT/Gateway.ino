@@ -1,4 +1,3 @@
-
 // LIBRARIES WE NEED
 #include <esp_now.h>
 #include <WiFi.h>
@@ -9,10 +8,12 @@ const char* ssid = "YOUR_WIFI_NAME";
 const char* password = "YOUR_WIFI_PASSWORD";
 
 // MQTT SETTINGS - CHANGE THESE TO MATCH YOUR SETUP
-const char* mqttServer = "YOUR_MQTT_SERVER_IP";
+const char* mqttServer = "broker.emqx.io";
 const int mqttPort = 1883;
-const char* mqttUser = "YOUR_MQTT_USERNAME";
-const char* mqttPassword = "YOUR_MQTT_PASSWORD";
+const char* mqttUser = "";    // public broker doesn't need credentials
+const char* mqttPassword = "";
+// Add a unique client ID to avoid conflicts with other users
+const char* mqttClientId = "AmmoniacGateway123";  // Change 123 to random numbers
 
 // THIS IS THE SAME DATA STRUCTURE AS THE NODES USE
 struct SensorData {
@@ -96,7 +97,7 @@ void connectToMqtt() {
     while (!mqttClient.connected()) {
         Serial.println("CONNECTING TO MQTT...");
         
-        if (mqttClient.connect("ESP32Gateway", mqttUser, mqttPassword)) {
+        if (mqttClient.connect(mqttClientId)) {  // Changed to use clientId
             Serial.println("CONNECTED TO MQTT");
         } else {
             Serial.print("MQTT CONNECTION FAILED! ERROR CODE: ");
