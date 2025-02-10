@@ -14,7 +14,7 @@ app.config['MQTT_BROKER_URL'] = 'broker.emqx.io'
 app.config['MQTT_BROKER_PORT'] = 1883
 app.config['MQTT_USERNAME'] = ''  # public broker doesn't need credentials
 app.config['MQTT_PASSWORD'] = ''
-app.config['MQTT_CLIENT_ID'] = 'AmmoniacServer123'  # Change 123 to random numbers
+app.config['MQTT_CLIENT_ID'] = 'AmmoniacServer080704'  # Change 123 to random numbers
 
 # Initialize MQTT and SocketIO
 mqtt = Mqtt(app)
