@@ -1,7 +1,7 @@
-
 // Include required libraries
 #include <esp_now.h>
 #include <WiFi.h>
+#include <random>
 
 // CHANGE THIS TO MATCH YOUR GATEWAY'S MAC ADDRESS
 uint8_t gatewayAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -10,6 +10,13 @@ uint8_t gatewayAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 #define MQ2_PIN 34
 // How often to take readings (in milliseconds)
 #define READING_INTERVAL 30000
+
+#define MIN_AMMONIA 0.0    // Minimum ammonia reading in PPM
+#define MAX_AMMONIA 50.0   // Maximum ammonia reading in PPM
+#define BASE_AMMONIA 5.0   // Base level of ammonia
+#define VARIATION 3.0      // How much readings can vary
+
+float lastReading = BASE_AMMONIA;  // Keep track of last reading for realistic variations
 
 // Structure to hold sensor data
 struct SensorData {
@@ -53,23 +60,25 @@ void setup() {
     }
 
     // Initialize our sensor data
-    sensorData.sensorID = 1;  // CHANGE THIS FOR EACH SENSOR NODE
+    sensorData.sensorID = 2;  // This is Trash Can B (changed from 1)
     sensorData.readingNumber = 0;
 }
 
 void loop() {
-    // Check if it's time to take a new reading
     if (millis() - lastReadingTime >= READING_INTERVAL) {
-        // Read the sensor
-        float sensorValue = analogRead(MQ2_PIN);
+        // Generate a realistic random ammonia reading
+        // Each new reading varies slightly from the last one
+        float variation = ((float)random(0, 1000) / 1000.0) * VARIATION;
+        if (random(2) == 0) variation = -variation;  // 50% chance of going up or down
         
-        // Convert raw reading to PPM (parts per million)
-        // NOTE: This conversion needs calibration for your specific sensor
-        float ammoniaPPM = sensorValue * (5.0 / 1023.0);
+        float newReading = lastReading + variation;
+        // Keep reading within realistic bounds
+        newReading = max(MIN_AMMONIA, min(MAX_AMMONIA, newReading));
         
         // Update our data structure
-        sensorData.ammoniaLevel = ammoniaPPM;
+        sensorData.ammoniaLevel = newReading;
         sensorData.readingNumber++;
+        lastReading = newReading;  // Save for next iteration
 
         // Send the data to the gateway
         esp_err_t result = esp_now_send(gatewayAddress, 
@@ -77,12 +86,11 @@ void loop() {
                                       sizeof(SensorData));
 
         if (result == ESP_OK) {
-            Serial.println("SENT READING SUCCESSFULLY");
+            Serial.printf("SENT READING: %.2f PPM\n", newReading);
         } else {
             Serial.println("FAILED TO SEND READING");
         }
 
-        // Update the last reading time
         lastReadingTime = millis();
     }
 }
