@@ -2,50 +2,160 @@
 <html>
 <head>
     <title>Ammonia Monitoring System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #4CAF50; color: white; }
-        tr:hover { background-color: #f5f5f5; }
+        :root {
+            --primary: #2563eb;
+            --secondary: #64748b;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --background: #f8fafc;
+            --card: #ffffff;
+            --text: #1e293b;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--background);
+            color: var(--text);
+            line-height: 1.5;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        h1 {
+            font-size: 1.875rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .readings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .reading-card {
+            background: var(--card);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .reading-title {
+            font-size: 0.875rem;
+            color: var(--secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .reading-value {
+            font-size: 2rem;
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .reading-timestamp {
+            font-size: 0.75rem;
+            color: var (--secondary);
+            margin-top: 0.5rem;
+        }
+
+        .chart-container {
+            background: var(--card);
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+            height: 400px;
+            margin-bottom: 1.5rem;
+        }
+
         .button {
-            background-color: #4CAF50;
-            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--primary);
             color: white;
-            padding: 15px 32px;
-            text-align: center;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
             text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
-            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .button:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+
+        @media (max-width: 768px) {
+            body { padding: 1rem; }
+            .reading-value { font-size: 1.5rem; }
+        }
+
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .loading-pulse {
+            animation: pulse 1.5s infinite;
         }
     </style>
 </head>
 <body>
-    <h1>Ammonia Monitoring Dashboard</h1>
-    
-    <a href="/download_csv" class="button">Download Data as CSV</a>
-    
-    <table id="readings-table">
-        <thead>
-            <tr>
-                <th>Sensor Location</th>
-                <th>Ammonia Level (PPM)</th>
-                <th>Last Updated</th>
-            </tr>
-        </thead>
-        <tbody id="readings-body">
-        </tbody>
-        <tfoot>
-            <tr>
-                <td><strong>Total Ammonia</strong></td>
-                <td id="total-ammonia">0.00</td>
-                <td></td>
-            </tr>
-        </tfoot>
-    </table>
+    <div class="container">
+        <div class="header">
+            <h1>Ammonia Monitoring Dashboard</h1>
+            <a href="/download_excel" class="button">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Download Excel Report
+            </a>
+        </div>
+
+        <div class="readings-grid" id="readings-grid">
+            <!-- Cards will be dynamically inserted here -->
+        </div>
+
+        <div class="chart-container">
+            <canvas id="ammoniaChart"></canvas>
+        </div>
+    </div>
 
     <script>
         const socket = io();
@@ -54,34 +164,129 @@
             2: "Trash Can B"
         };
 
-        // Update table when new reading arrives
-        socket.on('new_reading', function(data) {
-            updateTable();
-        });
+        // Chart configuration
+        const chartConfig = {
+            type: 'line',
+            data: {
+                datasets: [
+                    {
+                        label: 'Trash Can A',
+                        borderColor: '#2563eb',
+                        backgroundColor: '#2563eb20',
+                        data: [],
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Trash Can B',
+                        borderColor: '#ef4444',
+                        backgroundColor: '#ef444420',
+                        data: [],
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index'
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    },
+                    title: {
+                        display: true,
+                        text: 'Ammonia Levels Over Time'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'minute',
+                            tooltipFormat: 'HH:mm:ss',
+                            displayFormats: {
+                                minute: 'HH:mm'
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Time'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Ammonia Level (PPM)'
+                        }
+                    }
+                }
+            }
+        };
 
-        // Initial load and periodic refresh
-        updateTable();
-        setInterval(updateTable, 10000);
+        const ctx = document.getElementById('ammoniaChart').getContext('2d');
+        const chart = new Chart(ctx, chartConfig);
 
-        function updateTable() {
-            fetch('/current_data')
-                .then(response => response.json())
-                .then(data => {
-                    const tbody = document.getElementById('readings-body');
-                    tbody.innerHTML = '';
-                    let total = 0;
+        function updateReadingsGrid(data) {
+            const grid = document.getElementById('readings-grid');
+            grid.innerHTML = '';
 
-                    data.forEach(reading => {
-                        const row = tbody.insertRow();
-                        row.insertCell(0).textContent = sensorNames[reading.sensor_id] || `Sensor ${reading.sensor_id}`;
-                        row.insertCell(1).textContent = reading.ammonia.toFixed(2);
-                        row.insertCell(2).textContent = new Date(reading.timestamp).toLocaleString();
-                        total += reading.ammonia;
-                    });
+            let totalAmmonia = 0;
+            data.forEach(reading => {
+                totalAmmonia += reading.ammonia;
+                const card = document.createElement('div');
+                card.className = 'reading-card';
+                card.innerHTML = `
+                    <div class="reading-title">${sensorNames[reading.sensor_id]}</div>
+                    <div class="reading-value">${reading.ammonia.toFixed(2)} PPM</div>
+                    <div class="reading-timestamp">Last updated: ${new Date(reading.timestamp).toLocaleString()}</div>
+                `;
+                grid.appendChild(card);
+            });
 
-                    document.getElementById('total-ammonia').textContent = total.toFixed(2);
-                });
+            // Add total card
+            const totalCard = document.createElement('div');
+            totalCard.className = 'reading-card';
+            totalCard.innerHTML = `
+                <div class="reading-title">Total Ammonia</div>
+                <div class="reading-value">${totalAmmonia.toFixed(2)} PPM</div>
+                <div class="reading-timestamp">Combined reading from all sensors</div>
+            `;
+            grid.appendChild(totalCard);
         }
+
+        function updateEverything() {
+            document.body.classList.add('loading');
+            Promise.all([
+                fetch('/current_data').then(res => res.json()),
+                fetch('/historical_data').then(res => res.json())
+            ]).then(([currentData, historicalData]) => {
+                updateReadingsGrid(currentData);
+                
+                const sensorData = {1: [], 2: []};
+                historicalData.forEach(reading => {
+                    sensorData[reading.sensor_id].push({
+                        x: new Date(reading.timestamp),
+                        y: reading.ammonia
+                    });
+                });
+                
+                chart.data.datasets[0].data = sensorData[1] || [];
+                chart.data.datasets[1].data = sensorData[2] || [];
+                chart.update();
+                
+                document.body.classList.remove('loading');
+            });
+        }
+
+        updateEverything();
+        setInterval(updateEverything, 1000);
+        socket.on('new_reading', updateEverything);
     </script>
 </body>
 </html>

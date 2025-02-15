@@ -3,52 +3,61 @@
 #include <WiFi.h>
 #include <random>
 
+// COPY WIFI SETTINGS FROM GATEWAY
+const char* ssid = "Direktorat Kemendikbud";
+const char* password = "NadiemGantengSih";
+
 // CHANGE THIS TO MATCH YOUR GATEWAY'S MAC ADDRESS
-uint8_t gatewayAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+uint8_t gatewayAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Replace with actual Gateway MAC
 
-// Pin where MQ2 sensor is connected
-#define MQ2_PIN 34
-// How often to take readings (in milliseconds)
-#define READING_INTERVAL 30000
+// PIN DEFINITIONS
+#define MQ2_PIN 34          // Analog pin connected to MQ2 AO
+#define READING_INTERVAL 1000
 
-#define MIN_AMMONIA 0.0    // Minimum ammonia reading in PPM
-#define MAX_AMMONIA 50.0   // Maximum ammonia reading in PPM
-#define BASE_AMMONIA 5.0   // Base level of ammonia
-#define VARIATION 3.0      // How much readings can vary
+// SENSOR CALIBRATION VALUES - SAME AS GATEWAY
+#define VOLTAGE_RESOLUTION 3.3    
+#define ADC_RESOLUTION 4095.0     
+#define R0_CLEAN_AIR 9.83        
+#define MQ2_RL 5.0               
 
-float lastReading = BASE_AMMONIA;  // Keep track of last reading for realistic variations
-
-// Structure to hold sensor data
+// Structure to hold sensor data - MUST MATCH GATEWAY
 struct SensorData {
-    float ammoniaLevel;  // Ammonia reading
-    uint8_t sensorID;    // Unique ID for this sensor
-    uint32_t readingNumber; // Counter to track missed readings
+    float ammoniaLevel;
+    uint8_t sensorID;
+    uint32_t readingNumber;
 };
 
-// Create a data object
 SensorData sensorData;
-
-// Track when we last sent a reading
+float lastReading = 0;
 unsigned long lastReadingTime = 0;
+bool isCalibrated = false;
+float R0 = R0_CLEAN_AIR;
 
 void setup() {
-    // Start serial communication - lets us debug using the Serial Monitor
-    Serial.println("SENSOR NODE STARTING UP");
     Serial.begin(115200);
+    Serial.println("SENSOR NODE B STARTING UP");
 
-    // Set this device as a WiFi station
+    // Initialize MQ2 pin
+    pinMode(MQ2_PIN, INPUT);
+    
+    // Warmup and calibration
+    Serial.println("WARMING UP MQ2 SENSOR...");
+    delay(20000);  // 20 second warmup
+    
+    // Quick calibration
+    calibrateSensor();
+
+    // Set up ESP-NOW
     WiFi.mode(WIFI_STA);
-
-    // Start ESP-NOW
+    
     if (esp_now_init() != ESP_OK) {
         Serial.println("FAILED TO START ESP-NOW. HALTING.");
         while (1);
     }
 
-    // Register the function that will handle sending results
     esp_now_register_send_cb(OnDataSent);
 
-    // Add the gateway as a peer device
+    // Add gateway as peer
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, gatewayAddress, 6);
     peerInfo.channel = 0;
@@ -59,28 +68,50 @@ void setup() {
         while (1);
     }
 
-    // Initialize our sensor data
-    sensorData.sensorID = 2;  // This is Trash Can B (changed from 1)
+    // Initialize sensor data
+    sensorData.sensorID = 2;  // This is Trash Can B
     sensorData.readingNumber = 0;
+}
+
+// Copy these functions from Gateway.ino
+void calibrateSensor() {
+    Serial.println("CALIBRATING SENSOR...");
+    float avgResistance = 0;
+    for(int i = 0; i < 10; i++) {
+        avgResistance += getResistanceRatio();
+        delay(1000);
+    }
+    R0 = avgResistance / 10.0;
+    isCalibrated = true;
+    Serial.printf("CALIBRATION COMPLETE. R0 = %.2f\n", R0);
+}
+
+float getResistanceRatio() {
+    float rawADC = analogRead(MQ2_PIN);
+    float voltageOut = (rawADC * VOLTAGE_RESOLUTION) / ADC_RESOLUTION;
+    float Rs = ((VOLTAGE_RESOLUTION * MQ2_RL) / voltageOut) - MQ2_RL;
+    return Rs / R0;
+}
+
+float readAmmonia() {
+    if (!isCalibrated) return 0;
+    
+    float ratio = getResistanceRatio();
+    float ppm = 102.2 * pow(ratio, -2.473);
+    return ppm;
 }
 
 void loop() {
     if (millis() - lastReadingTime >= READING_INTERVAL) {
-        // Generate a realistic random ammonia reading
-        // Each new reading varies slightly from the last one
-        float variation = ((float)random(0, 1000) / 1000.0) * VARIATION;
-        if (random(2) == 0) variation = -variation;  // 50% chance of going up or down
+        // Read actual sensor
+        float newReading = readAmmonia();
         
-        float newReading = lastReading + variation;
-        // Keep reading within realistic bounds
-        newReading = max(MIN_AMMONIA, min(MAX_AMMONIA, newReading));
-        
-        // Update our data structure
+        // Update data structure
         sensorData.ammoniaLevel = newReading;
         sensorData.readingNumber++;
-        lastReading = newReading;  // Save for next iteration
+        lastReading = newReading;
 
-        // Send the data to the gateway
+        // Send to gateway
         esp_err_t result = esp_now_send(gatewayAddress, 
                                       (uint8_t *) &sensorData, 
                                       sizeof(SensorData));
@@ -95,7 +126,6 @@ void loop() {
     }
 }
 
-// This function runs whenever we try to send data
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
     Serial.print("Last Packet Send Status: ");
     Serial.println(status == ESP_NOW_SEND_SUCCESS ? "SUCCESS" : "FAILED");
