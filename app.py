@@ -17,6 +17,9 @@ app = Flask(__name__)
 # Add subscription tracking
 mqtt_subscription_active = False
 
+# Add after other global variables:
+last_sequence = None
+
 # MQTT Settings
 app.config['MQTT_BROKER_URL'] = 'broker.emqx.io'
 app.config['MQTT_BROKER_PORT'] = 1883
@@ -56,20 +59,38 @@ def handle_connect(client, userdata, flags, rc):
 @mqtt.on_message()
 def handle_mqtt_message(client, userdata, message):
     """HANDLES INCOMING MQTT MESSAGES"""
-    print(f"Received message on topic: {message.topic}")  # Add debug print
-    data = json.loads(message.payload.decode())
-    print(f"Message data: {data}")  # Add debug print
+    global last_sequence
     
-    # Save to database
-    conn = sqlite3.connect('sensors.db')
-    c = conn.cursor()
-    c.execute('INSERT INTO readings VALUES (?, ?, ?)',
-              (datetime.now().isoformat(), data['sensor_id'], data['ammonia']))
-    conn.commit()
-    conn.close()
-    
-    # Emit to websocket for real-time updates
-    socketio.emit('new_reading', data)
+    try:
+        print(f"Received message on topic: {message.topic}")
+        data = json.loads(message.payload.decode())
+        print(f"Message data: {data}")
+        
+        # Check sequence number to avoid duplicates
+        if last_sequence is not None and data.get('sequence', 0) <= last_sequence:
+            print(f"Skipping duplicate or old message (sequence: {data.get('sequence')})")
+            return
+            
+        last_sequence = data.get('sequence', 0)
+        current_time = datetime.now().isoformat()
+        
+        # Save all readings to database
+        conn = sqlite3.connect('sensors.db')
+        c = conn.cursor()
+        
+        if 'readings' in data:  # New combined format
+            for reading in data['readings']:
+                c.execute('INSERT INTO readings VALUES (?, ?, ?)',
+                         (current_time, reading['sensor_id'], reading['ammonia']))
+                # Emit individual updates for real-time display
+                socketio.emit('new_reading', reading)
+        
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        print(f"Error processing message: {e}")
+        print(f"Message payload: {message.payload}")
 
 @app.route('/')
 def index():
@@ -125,33 +146,35 @@ def get_historical_data():
 def download_excel():
     """GENERATES AN EXCEL FILE OF ALL READINGS WITH PROPER FORMATTING AND TOTALS"""
     conn = sqlite3.connect('sensors.db')
-    conn.create_function('round_timestamp', 1, lambda ts: ts[:-4] + '00.000' if ts else None)
     c = conn.cursor()
     
-    # Modified query with COALESCE to handle NULL timestamps
+    # Modified query to group readings within 5-second windows
     c.execute('''
-        WITH TimeGroups AS (
+        WITH TimeWindows AS (
+            -- First, round timestamps to 5-second intervals
             SELECT 
-                COALESCE(round_timestamp(timestamp), datetime('now')) as rounded_time,
+                strftime('%Y-%m-%d %H:%M:', timestamp) || 
+                (cast(strftime('%S', timestamp) as integer) / 5 * 5) as window_start,
                 sensor_id,
                 ammonia
             FROM readings
             WHERE timestamp IS NOT NULL
         ),
-        PivotedData AS (
+        GroupedData AS (
+            -- Then group by these 5-second windows
             SELECT 
-                rounded_time as timestamp,
+                window_start,
                 MAX(CASE WHEN sensor_id = 1 THEN ammonia ELSE 0 END) as trash_can_a,
                 MAX(CASE WHEN sensor_id = 2 THEN ammonia ELSE 0 END) as trash_can_b
-            FROM TimeGroups
-            GROUP BY rounded_time
+            FROM TimeWindows
+            GROUP BY window_start
         )
         SELECT 
-            datetime(timestamp) as human_time,
+            window_start as timestamp,
             trash_can_a,
             trash_can_b,
             (trash_can_a + trash_can_b) as total_ppm
-        FROM PivotedData
+        FROM GroupedData
         ORDER BY timestamp DESC
     ''')
     
@@ -170,27 +193,35 @@ def download_excel():
         cell.font = Font(bold=True)
         cell.fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
     
-    # Add data with error handling for timestamps
+    # Add data
     for row_idx, row in enumerate(rows, 2):
-        try:
-            # Handle potential None values
-            if row[0]:
-                timestamp = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
-                formatted_time = timestamp.strftime('%Y-%m-%d %H:%M')
-            else:
-                formatted_time = "N/A"
-                
-            ws.cell(row=row_idx, column=1, value=formatted_time)
-            ws.cell(row=row_idx, column=2, value=round(row[1] or 0, 2))
-            ws.cell(row=row_idx, column=3, value=round(row[2] or 0, 2))
-            ws.cell(row=row_idx, column=4, value=round(row[3] or 0, 2))
-        except Exception as e:
-            print(f"Error processing row {row}: {e}")
-            continue
+        ws.cell(row=row_idx, column=1, value=row[0])  # Timestamp is already formatted
+        ws.cell(row=row_idx, column=2, value=round(row[1], 2))
+        ws.cell(row=row_idx, column=3, value=round(row[2], 2))
+        ws.cell(row=row_idx, column=4, value=round(row[3], 2))
+        
+        # Color coding for the total
+        if row[3] > 20:  # High level
+            ws.cell(row=row_idx, column=4).fill = PatternFill(start_color="FFD9D9", end_color="FFD9D9", fill_type="solid")
+        elif row[3] > 10:  # Medium level
+            ws.cell(row=row_idx, column=4).fill = PatternFill(start_color="FFEDCC", end_color="FFEDCC", fill_type="solid")
     
     # Auto-adjust column widths
     for col in range(1, len(headers) + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 15
+        ws.column_dimensions[get_column_letter(col)].width = 20
+    
+    # Add summary at the bottom
+    summary_row = len(rows) + 3
+    ws.cell(row=summary_row, column=1, value="Average Values")
+    ws.cell(row=summary_row, column=2, value=f"=AVERAGE(B2:B{len(rows)+1})")
+    ws.cell(row=summary_row, column=3, value=f"=AVERAGE(C2:C{len(rows)+1})")
+    ws.cell(row=summary_row, column=4, value=f"=AVERAGE(D2:D{len(rows)+1})")
+    
+    # Format summary row
+    for col in range(1, 5):
+        cell = ws.cell(row=summary_row, column=col)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="E6E6E6", end_color="E6E6E6", fill_type="solid")
     
     # Create Excel file in memory
     excel_file = io.BytesIO()

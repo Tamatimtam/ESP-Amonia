@@ -1,4 +1,3 @@
-
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -28,6 +27,9 @@ float smoothedB = 0;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+uint32_t messageSequence = 0;  // Track message sequence
+const int MQTT_RETRY_ATTEMPTS = 3;  // Number of publish retries
 
 void setup() {
   Serial.begin(115200);
@@ -83,20 +85,43 @@ float convertToPPM(float reading) {
   return min(ppm, MAX_PPM);
 }
 
-void publishReading(int sensorId, float ppm) {
+void publishReadings(float ppmA, float ppmB) {
   if (!client.connected()) {
     reconnect();
   }
   
-  StaticJsonDocument<200> doc;
-  doc["sensor_id"] = sensorId;
-  doc["ammonia"] = ppm;
+  StaticJsonDocument<300> doc;
+  doc["sequence"] = messageSequence++;
+  doc["timestamp"] = millis();
   
-  char jsonBuffer[100];
+  JsonArray readings = doc.createNestedArray("readings");
+  
+  JsonObject sensorA = readings.createNestedObject();
+  sensorA["sensor_id"] = 1;
+  sensorA["ammonia"] = ppmA;
+  
+  JsonObject sensorB = readings.createNestedObject();
+  sensorB["sensor_id"] = 2;
+  sensorB["ammonia"] = ppmB;
+  
+  char jsonBuffer[300];
   serializeJson(doc, jsonBuffer);
   
-  String topic = "amoniac/sensor/" + String(sensorId);
-  client.publish(topic.c_str(), jsonBuffer);
+  // Try to publish multiple times if needed
+  bool published = false;
+  for(int i = 0; i < MQTT_RETRY_ATTEMPTS && !published; i++) {
+    if (client.publish("amoniac/sensor/combined", jsonBuffer)) {
+      published = true;
+      Serial.println("Published successfully");
+    } else {
+      Serial.println("Publish failed, retrying...");
+      delay(100);  // Short delay before retry
+    }
+  }
+  
+  if (!published) {
+    Serial.println("Failed to publish after all attempts");
+  }
 }
 
 void reconnect() {
@@ -123,12 +148,11 @@ void loop() {
   float ppmA = convertToPPM(smoothedA);
   float ppmB = convertToPPM(smoothedB);
   
-  // Publish readings
-  publishReading(1, ppmA);  // Trash can A = sensor_id 1
-  publishReading(2, ppmB);  // Trash can B = sensor_id 2
+  // Publish both readings together
+  publishReadings(ppmA, ppmB);
   
   // Debug output
   Serial.printf("A: %.2f PPM, B: %.2f PPM\n", ppmA, ppmB);
   
-  delay(1000);  // Wait 1 second before next reading
+  delay(1000);
 }
